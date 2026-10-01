@@ -1,8 +1,5 @@
 # Nighttime Street Light Functional Audit Using Computer Vision on Edge Device
 
-## 📹 Demo
-
-[![Watch the demo](https://img.shields.io/badge/▶-Watch%20Demo%20Video-blue?style=for-the-badge)](https://drive.google.com/file/d/1DqAxfWTwXV9MOyhZ1io3GhFd1Rcj6dv2/view?usp=sharing)
 
 ## 1. Problem Statement, Motivation & Objectives (1–2 paragraphs + 3–5 bullets)
 Urban street lighting is a critical component of public infrastructure it improves visibility, reduces crime, and supports safe vehicular and pedestrian movement after dark. Yet maintaining expansive street lighting networks at city scale remains a formidable challenge. Cities worldwide operate hundreds of thousands of streetlights (Los Angeles alone maintains over 220,000 units), and globally the number is projected to exceed 350 million. Despite their importance, most cities still rely on outdated maintenance practices: periodic manual inspections and citizen complaint-driven reporting. These approaches are labor-intensive, error-prone, and slow to detect outages, leaving malfunctioning lamps unnoticed for extended periods and compromising both public safety and energy efficiency.
