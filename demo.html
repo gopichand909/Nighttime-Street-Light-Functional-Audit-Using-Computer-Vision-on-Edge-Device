@@ -1,0 +1,951 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Real-Time Object Tracker</title>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+  :root {
+    --bg: #080c10;
+    --surface: #0e1419;
+    --surface2: #151c24;
+    --accent: #00e5ff;
+    --accent2: #00ff94;
+    --warn: #ffb300;
+    --danger: #ff4444;
+    --text: #e8f0f8;
+    --muted: #5a7a96;
+    --border: rgba(0,229,255,0.12);
+  }
+
+  html, body {
+    width: 100%; height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'SF Mono', 'Fira Code', 'JetBrains Mono', monospace;
+    overflow: hidden;
+  }
+
+  #app {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    height: 100dvh;
+  }
+
+  /* ── Header ── */
+  header {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px 10px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    z-index: 10;
+  }
+
+  .logo {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .logo-icon {
+    width: 28px; height: 28px;
+    border: 1.5px solid var(--accent);
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .logo-icon::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(135deg, rgba(0,229,255,0.15), transparent);
+  }
+
+  .logo-icon svg { width: 16px; height: 16px; }
+
+  .logo-text {
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    color: var(--accent);
+    text-transform: uppercase;
+  }
+
+  .status-pill {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 5px 10px;
+    font-size: 11px;
+    letter-spacing: 1px;
+    color: var(--muted);
+    transition: all 0.3s;
+  }
+
+  .status-pill.active { color: var(--accent2); border-color: rgba(0,255,148,0.25); }
+  .status-pill.loading { color: var(--warn); border-color: rgba(255,179,0,0.25); }
+  .status-pill.error { color: var(--danger); border-color: rgba(255,68,68,0.25); }
+
+  .dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+  }
+
+  .dot.pulse { animation: pulse 1.4s ease-in-out infinite; }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.4; transform: scale(0.7); }
+  }
+
+  /* ── Viewfinder ── */
+  #viewfinder {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+    background: #000;
+  }
+
+  #video {
+    position: absolute;
+    inset: 0;
+    width: 100%; height: 100%;
+    object-fit: cover;
+  }
+
+  #canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%; height: 100%;
+  }
+
+  /* Scanner overlay */
+  .scan-overlay {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+  }
+
+  .corner {
+    position: absolute;
+    width: 22px; height: 22px;
+    border-color: var(--accent);
+    border-style: solid;
+    opacity: 0.7;
+  }
+
+  .corner.tl { top: 16px; left: 16px; border-width: 2px 0 0 2px; border-radius: 3px 0 0 0; }
+  .corner.tr { top: 16px; right: 16px; border-width: 2px 2px 0 0; border-radius: 0 3px 0 0; }
+  .corner.bl { bottom: 16px; left: 16px; border-width: 0 0 2px 2px; border-radius: 0 0 0 3px; }
+  .corner.br { bottom: 16px; right: 16px; border-width: 0 2px 2px 0; border-radius: 0 0 3px 0; }
+
+  .scan-line {
+    position: absolute;
+    left: 16px; right: 16px;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    top: 16px;
+    animation: scanline 2.8s ease-in-out infinite;
+    opacity: 0;
+  }
+
+  @keyframes scanline {
+    0% { top: 16px; opacity: 0; }
+    10% { opacity: 0.6; }
+    90% { opacity: 0.6; }
+    100% { top: calc(100% - 16px); opacity: 0; }
+  }
+
+  /* Loading screen */
+  #loading-screen {
+    position: absolute;
+    inset: 0;
+    background: var(--bg);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 20px;
+    z-index: 20;
+    transition: opacity 0.5s;
+  }
+
+  #loading-screen.hidden { opacity: 0; pointer-events: none; }
+
+  .load-ring {
+    width: 64px; height: 64px;
+    border-radius: 50%;
+    border: 2px solid var(--surface2);
+    border-top-color: var(--accent);
+    border-right-color: var(--accent2);
+    animation: spin 1s linear infinite;
+  }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .load-label {
+    font-size: 11px;
+    letter-spacing: 2px;
+    color: var(--muted);
+    text-transform: uppercase;
+  }
+
+  .load-progress {
+    width: 140px;
+    height: 2px;
+    background: var(--surface2);
+    border-radius: 1px;
+    overflow: hidden;
+  }
+
+  .load-bar {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent), var(--accent2));
+    width: 0%;
+    transition: width 0.4s;
+  }
+
+  /* ── Stats bar ── */
+  #stats {
+    flex-shrink: 0;
+    display: flex;
+    gap: 0;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+  }
+
+  .stat {
+    flex: 1;
+    padding: 10px 12px;
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .stat:last-child { border-right: none; }
+
+  .stat-label {
+    font-size: 9px;
+    letter-spacing: 1.5px;
+    color: var(--muted);
+    text-transform: uppercase;
+  }
+
+  .stat-value {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--accent);
+    line-height: 1;
+  }
+
+  .stat-value.green { color: var(--accent2); }
+  .stat-value.amber { color: var(--warn); }
+
+  /* ── Controls ── */
+  #controls {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    gap: 10px;
+  }
+
+  .ctrl-btn {
+    flex: 1;
+    padding: 10px 8px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--surface2);
+    color: var(--muted);
+    font-family: inherit;
+    font-size: 10px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    -webkit-appearance: none;
+  }
+
+  .ctrl-btn:active { transform: scale(0.96); }
+  .ctrl-btn.active { background: rgba(0,229,255,0.1); color: var(--accent); border-color: rgba(0,229,255,0.3); }
+
+  .ctrl-btn svg { width: 14px; height: 14px; flex-shrink: 0; }
+
+  .shutter {
+    width: 52px; height: 52px;
+    border-radius: 50%;
+    border: 2px solid var(--accent);
+    background: transparent;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: all 0.2s;
+    -webkit-appearance: none;
+  }
+
+  .shutter:active { transform: scale(0.92); background: rgba(0,229,255,0.15); }
+  .shutter.paused { border-color: var(--warn); }
+
+  .shutter-inner {
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    background: var(--accent);
+    transition: all 0.2s;
+  }
+
+  .shutter.paused .shutter-inner { background: var(--warn); }
+
+  /* ── Permission prompt ── */
+  #permission-prompt {
+    position: absolute;
+    inset: 0;
+    background: var(--bg);
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    padding: 32px;
+    z-index: 30;
+    text-align: center;
+  }
+
+  #permission-prompt.show { display: flex; }
+
+  .perm-icon {
+    width: 64px; height: 64px;
+    border-radius: 16px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: center;
+  }
+
+  .perm-icon svg { width: 32px; height: 32px; color: var(--accent); }
+
+  .perm-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text);
+    letter-spacing: 0.5px;
+  }
+
+  .perm-desc {
+    font-size: 12px;
+    color: var(--muted);
+    line-height: 1.6;
+    max-width: 240px;
+  }
+
+  .perm-btn {
+    padding: 12px 28px;
+    border-radius: 10px;
+    background: var(--accent);
+    color: #000;
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    border: none;
+    cursor: pointer;
+    -webkit-appearance: none;
+  }
+
+  /* ── Objects list overlay ── */
+  #obj-list {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: linear-gradient(transparent, rgba(8,12,16,0.9));
+    padding: 32px 12px 12px;
+    pointer-events: none;
+    min-height: 60px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    align-items: flex-end;
+  }
+
+  .obj-tag {
+    background: rgba(8,12,16,0.85);
+    border: 1px solid rgba(0,229,255,0.2);
+    border-radius: 4px;
+    padding: 3px 8px;
+    font-size: 11px;
+    letter-spacing: 0.5px;
+    color: var(--accent);
+    white-space: nowrap;
+  }
+
+  .obj-tag .conf {
+    color: var(--muted);
+    font-size: 10px;
+    margin-left: 4px;
+  }
+
+  /* FPS counter */
+  #fps-display {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    background: rgba(8,12,16,0.75);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 3px 7px;
+    font-size: 11px;
+    color: var(--muted);
+    pointer-events: none;
+    letter-spacing: 0.5px;
+  }
+
+  /* Threshold slider */
+  #threshold-wrap {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+
+  #threshold-wrap label {
+    font-size: 9px;
+    letter-spacing: 1.5px;
+    color: var(--muted);
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+
+  #threshold-wrap input[type=range] {
+    flex: 1;
+    accent-color: var(--accent);
+    height: 2px;
+  }
+
+  #threshold-val {
+    font-size: 12px;
+    color: var(--accent);
+    min-width: 32px;
+    text-align: right;
+  }
+  
+  #error-msg {
+    color: var(--danger);
+    font-size: 10px;
+    margin-top: 8px;
+    max-width: 240px;
+    word-wrap: break-word;
+  }
+</style>
+</head>
+<body>
+<div id="app">
+
+  <header>
+    <div class="logo">
+      <div class="logo-icon">
+        <svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <rect x="1" y="1" width="5" height="5" rx="1" stroke="#00e5ff" stroke-width="1.2"/>
+          <rect x="10" y="1" width="5" height="5" rx="1" stroke="#00e5ff" stroke-width="1.2"/>
+          <rect x="1" y="10" width="5" height="5" rx="1" stroke="#00e5ff" stroke-width="1.2"/>
+          <rect x="10" y="10" width="5" height="5" rx="1" stroke="#00ff94" stroke-width="1.2"/>
+        </svg>
+      </div>
+      <span class="logo-text">TRACKER</span>
+    </div>
+    <div class="status-pill loading" id="status">
+      <span class="dot pulse"></span>
+      <span id="status-text">INIT</span>
+    </div>
+  </header>
+
+  <div id="viewfinder">
+    <video id="video" autoplay playsinline muted></video>
+    <canvas id="canvas"></canvas>
+
+    <div class="scan-overlay">
+      <div class="corner tl"></div>
+      <div class="corner tr"></div>
+      <div class="corner bl"></div>
+      <div class="corner br"></div>
+      <div class="scan-line"></div>
+    </div>
+
+    <div id="fps-display">-- FPS</div>
+    <div id="obj-list"></div>
+
+    <div id="loading-screen">
+      <div class="load-ring"></div>
+      <div class="load-label" id="load-label">Loading model...</div>
+      <div class="load-progress"><div class="load-bar" id="load-bar"></div></div>
+    </div>
+
+    <div id="permission-prompt">
+      <div class="perm-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M15 10h.01M3 7a2 2 0 012-2h14a2 2 0 012 v10a2 2 0 01-2 2H5a2 2 0 01-2-2V7z"/>
+          <circle cx="15" cy="10" r="2"/>
+          <path d="M6 17l4.5-4.5 3 3 2-2"/>
+        </svg>
+      </div>
+      <div class="perm-title">Camera Access Needed</div>
+      <div class="perm-desc">This app uses your camera to track objects in real time. Please ensure you are on HTTPS. No data is stored or transmitted.</div>
+      <button class="perm-btn" id="allow-btn">Allow Camera</button>
+      <div id="error-msg"></div>
+    </div>
+  </div>
+
+  <div id="threshold-wrap">
+    <label>Confidence</label>
+    <input type="range" id="threshold" min="10" max="95" value="50" step="5">
+    <span id="threshold-val">50%</span>
+  </div>
+
+  <div id="stats">
+    <div class="stat">
+      <span class="stat-label">Tracked</span>
+      <span class="stat-value green" id="count">0</span>
+    </div>
+    <div class="stat">
+      <span class="stat-label">Top Match</span>
+      <span class="stat-value" id="top-label" style="font-size:11px;letter-spacing:0.5px;color:var(--muted)">---</span>
+    </div>
+    <div class="stat">
+      <span class="stat-label">Conf.</span>
+      <span class="stat-value amber" id="top-conf">--</span>
+    </div>
+  </div>
+
+  <div id="controls">
+    <button class="ctrl-btn" id="flip-btn">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M20 7H4m16 0l-3-3m3 3l-3 3M4 17h16M4 17l3-3M4 17l3 3"/>
+      </svg>
+      Flip
+    </button>
+    <button class="shutter" id="pause-btn" title="Pause tracking">
+      <div class="shutter-inner"></div>
+    </button>
+    <button class="ctrl-btn active" id="trails-btn">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
+      </svg>
+      Trails
+    </button>
+  </div>
+</div>
+
+<script>
+const video = document.getElementById('video');
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const statusEl = document.getElementById('status');
+const statusText = document.getElementById('status-text');
+const loadBar = document.getElementById('load-bar');
+const loadLabel = document.getElementById('load-label');
+const loadScreen = document.getElementById('loading-screen');
+const permPrompt = document.getElementById('permission-prompt');
+const errorMsg = document.getElementById('error-msg');
+const fpsDisplay = document.getElementById('fps-display');
+const objList = document.getElementById('obj-list');
+const countEl = document.getElementById('count');
+const topLabel = document.getElementById('top-label');
+const topConf = document.getElementById('top-conf');
+const thresholdInput = document.getElementById('threshold');
+const thresholdVal = document.getElementById('threshold-val');
+
+let model = null;
+let isPaused = false;
+let showTrails = true;
+let facingMode = 'environment';
+let stream = null;
+let frameCount = 0;
+let lastFpsTime = performance.now();
+let threshold = 0.5;
+
+const COLORS = [
+  '#00e5ff','#00ff94','#ffb300','#ff6b6b','#c084fc',
+  '#fb923c','#34d399','#60a5fa','#f472b6','#a3e635'
+];
+
+function getTrackColor(id) {
+  return COLORS[(id - 1) % COLORS.length];
+}
+
+/* ────────────────────────────────────────────────────────
+   OBJECT TRACKER ENGINE (IoU + Centroid Tracking)
+──────────────────────────────────────────────────────── */
+class TrackedObject {
+  constructor(id, bbox, label, score) {
+    this.id = id;
+    this.bbox = bbox; // [x, y, w, h] in video coordinates
+    this.label = label;
+    this.score = score;
+    this.history = []; // Centroid trajectory points
+    this.missingFrames = 0;
+    this.addCenter(bbox);
+  }
+
+  addCenter(bbox) {
+    const cx = bbox[0] + bbox[2] / 2;
+    const cy = bbox[1] + bbox[3] / 2;
+    this.history.push({ x: cx, y: cy });
+    if (this.history.length > 25) this.history.shift(); // Trail memory depth
+  }
+
+  update(bbox, score) {
+    this.bbox = bbox;
+    this.score = score;
+    this.missingFrames = 0;
+    this.addCenter(bbox);
+  }
+}
+
+class IoUTracker {
+  constructor(iouThreshold = 0.25, maxMissing = 10) {
+    this.iouThreshold = iouThreshold;
+    this.maxMissing = maxMissing;
+    this.nextId = 1;
+    this.tracks = [];
+  }
+
+  calculateIoU(boxA, boxB) {
+    const [x1, y1, w1, h1] = boxA;
+    const [x2, y2, w2, h2] = boxB;
+
+    const xA = Math.max(x1, x2);
+    const yA = Math.max(y1, y2);
+    const xB = Math.min(x1 + w1, x2 + w2);
+    const yB = Math.min(y1 + h1, y2 + h2);
+
+    const interArea = Math.max(0, xB - xA) * Math.max(0, yB - yA);
+    if (interArea === 0) return 0;
+
+    const areaA = w1 * h1;
+    const areaB = w2 * h2;
+    return interArea / (areaA + areaB - interArea);
+  }
+
+  update(detections) {
+    const matchedDetections = new Set();
+
+    this.tracks.forEach(track => {
+      let bestIoU = 0;
+      let bestIdx = -1;
+
+      detections.forEach((det, idx) => {
+        if (matchedDetections.has(idx)) return;
+        if (det.class === track.label) {
+          const iou = this.calculateIoU(track.bbox, det.bbox);
+          if (iou > bestIoU && iou >= this.iouThreshold) {
+            bestIoU = iou;
+            bestIdx = idx;
+          }
+        }
+      });
+
+      if (bestIdx !== -1) {
+        track.update(detections[bestIdx].bbox, detections[bestIdx].score);
+        matchedDetections.add(bestIdx);
+      } else {
+        track.missingFrames++;
+      }
+    });
+
+    // Create new tracks for unmatched detections
+    detections.forEach((det, idx) => {
+      if (!matchedDetections.has(idx)) {
+        const newTrack = new TrackedObject(this.nextId++, det.bbox, det.class, det.score);
+        this.tracks.push(newTrack);
+      }
+    });
+
+    // Clean up tracks missing for too long
+    this.tracks = this.tracks.filter(track => track.missingFrames <= this.maxMissing);
+
+    return this.tracks;
+  }
+}
+
+const tracker = new IoUTracker(0.25, 10);
+
+/* ────────────────────────────────────────────────────────
+   RENDER ENGINE & CAMERA CONTROLS
+──────────────────────────────────────────────────────── */
+function setStatus(state, text) {
+  statusEl.className = 'status-pill ' + state;
+  statusText.textContent = text;
+  const dot = statusEl.querySelector('.dot');
+  dot.className = 'dot' + (state === 'active' ? '' : ' pulse');
+}
+
+async function startCamera() {
+  try {
+    if (stream) stream.getTracks().forEach(t => t.stop());
+
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: { ideal: facingMode },
+          width: { ideal: 640 },
+          height: { ideal: 480 }
+        },
+        audio: false
+      });
+    } catch (specificErr) {
+      stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+    }
+
+    video.srcObject = stream;
+
+    if (facingMode === 'user') {
+      video.style.transform = 'scaleX(-1)';
+    } else {
+      video.style.transform = 'scaleX(1)';
+    }
+
+    await new Promise(r => video.onloadedmetadata = r);
+    video.play();
+    permPrompt.classList.remove('show');
+    errorMsg.textContent = "";
+    return true;
+  } catch(e) {
+    console.error("Camera error:", e);
+    if (!window.isSecureContext) {
+      errorMsg.textContent = "Error: Must be hosted on HTTPS (like GitHub Pages) to access camera.";
+    } else {
+      errorMsg.textContent = "Camera error: " + e.message;
+    }
+    permPrompt.classList.add('show');
+    return false;
+  }
+}
+
+async function loadModel() {
+  loadLabel.textContent = 'Loading TF.js...';
+  loadBar.style.width = '30%';
+  await tf.ready();
+
+  loadLabel.textContent = 'Loading MobileNet model...';
+  loadBar.style.width = '70%';
+  model = await cocoSsd.load({ base: 'mobilenet_v2' });
+
+  loadBar.style.width = '100%';
+  loadLabel.textContent = 'Ready!';
+  await new Promise(r => setTimeout(r, 400));
+  loadScreen.classList.add('hidden');
+}
+
+function resizeCanvas() {
+  const rect = video.getBoundingClientRect();
+  canvas.width = rect.width * devicePixelRatio;
+  canvas.height = rect.height * devicePixelRatio;
+  canvas.style.width = rect.width + 'px';
+  canvas.style.height = rect.height + 'px';
+}
+
+function drawTracks(tracks) {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  const scaleX = canvas.width / video.videoWidth;
+  const scaleY = canvas.height / video.videoHeight;
+
+  tracks.forEach(t => {
+    let [x, y, w, h] = t.bbox;
+
+    // Correct front camera mirroring for bounds and trails
+    if (facingMode === 'user') {
+      x = video.videoWidth - x - w;
+    }
+
+    const color = getTrackColor(t.id);
+    const sx = x * scaleX;
+    const sy = y * scaleY;
+    const sw = w * scaleX;
+    const sh = h * scaleY;
+    const conf = (t.score * 100).toFixed(0);
+
+    // 1. Render Motion Trajectory Lines
+    if (showTrails && t.history.length > 1) {
+      ctx.beginPath();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2 * devicePixelRatio;
+      ctx.globalAlpha = 0.6;
+
+      t.history.forEach((pt, idx) => {
+        let hx = pt.x;
+        if (facingMode === 'user') hx = video.videoWidth - hx;
+        const tx = hx * scaleX;
+        const ty = pt.y * scaleY;
+
+        if (idx === 0) ctx.moveTo(tx, ty);
+        else ctx.lineTo(tx, ty);
+      });
+      ctx.stroke();
+      ctx.globalAlpha = 1.0;
+    }
+
+    // 2. Render Bounding Box
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2 * devicePixelRatio;
+    ctx.strokeRect(sx, sy, sw, sh);
+
+    // 3. Render Tactical Bounding Box Corners
+    const corner = 12 * devicePixelRatio;
+    ctx.lineWidth = 3 * devicePixelRatio;
+    [
+      [sx, sy, corner, 0, 0, corner],
+      [sx + sw, sy, -corner, 0, 0, corner],
+      [sx, sy + sh, corner, 0, 0, -corner],
+      [sx + sw, sy + sh, -corner, 0, 0, -corner]
+    ].forEach(([cx, cy, dx1, dy1, dx2, dy2]) => {
+      ctx.beginPath();
+      ctx.moveTo(cx + dx1, cy);
+      ctx.lineTo(cx, cy);
+      ctx.lineTo(cx, cy + dy2);
+      ctx.stroke();
+    });
+
+    // 4. Render Track ID + Label Badge
+    const label = `#${t.id} ${t.label.toUpperCase()}`;
+    const fontSize = 11 * devicePixelRatio;
+    ctx.font = `700 ${fontSize}px "SF Mono", monospace`;
+    const tw = ctx.measureText(label + ' ' + conf + '%').width;
+    const th = fontSize + 8 * devicePixelRatio;
+    const tx = sx;
+    const ty = sy - th - 2;
+
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.roundRect(tx, ty < 0 ? sy + 2 : ty, tw + 10 * devicePixelRatio, th, 3);
+    ctx.fill();
+
+    ctx.fillStyle = '#000';
+    ctx.fillText(label + ' ' + conf + '%', tx + 5 * devicePixelRatio, (ty < 0 ? sy + 2 : ty) + fontSize + 2 * devicePixelRatio);
+  });
+}
+
+function updateUI(tracks) {
+  countEl.textContent = tracks.length;
+  objList.innerHTML = '';
+
+  if (tracks.length === 0) {
+    topLabel.textContent = '---';
+    topConf.textContent = '--';
+    return;
+  }
+
+  const sorted = [...tracks].sort((a,b) => b.score - a.score);
+  topLabel.textContent = `#${sorted[0].id} ${sorted[0].label.toUpperCase()}`;
+  topConf.textContent = (sorted[0].score * 100).toFixed(0) + '%';
+
+  sorted.forEach(t => {
+    const tag = document.createElement('div');
+    tag.className = 'obj-tag';
+    tag.innerHTML = `#${t.id} ${t.label}<span class="conf">${(t.score*100).toFixed(0)}%</span>`;
+    tag.style.borderColor = getTrackColor(t.id) + '66';
+    tag.style.color = getTrackColor(t.id);
+    objList.appendChild(tag);
+  });
+}
+
+async function detectAndTrack() {
+  if (!model || isPaused || video.paused || video.ended) {
+    requestAnimationFrame(detectAndTrack);
+    return;
+  }
+
+  resizeCanvas();
+
+  try {
+    const rawDets = await model.detect(video, 20, threshold);
+    const activeTracks = tracker.update(rawDets);
+    drawTracks(activeTracks);
+    updateUI(activeTracks);
+  } catch(e) {
+    console.error(e);
+  }
+
+  frameCount++;
+  const now = performance.now();
+  if (now - lastFpsTime >= 1000) {
+    const fps = (frameCount / ((now - lastFpsTime) / 1000)).toFixed(0);
+    fpsDisplay.textContent = fps + ' FPS';
+    frameCount = 0;
+    lastFpsTime = now;
+  }
+
+  requestAnimationFrame(detectAndTrack);
+}
+
+async function init() {
+  setStatus('loading', 'LOADING');
+  const camOk = await startCamera();
+  if (!camOk) { setStatus('error', 'NO CAM'); return; }
+  setStatus('loading', 'MODEL');
+  await loadModel();
+  setStatus('active', 'LIVE');
+  detectAndTrack();
+}
+
+document.getElementById('allow-btn').addEventListener('click', async () => {
+  permPrompt.classList.remove('show');
+  await init();
+});
+
+document.getElementById('pause-btn').addEventListener('click', () => {
+  isPaused = !isPaused;
+  const btn = document.getElementById('pause-btn');
+  btn.classList.toggle('paused', isPaused);
+  setStatus(isPaused ? 'loading' : 'active', isPaused ? 'PAUSED' : 'LIVE');
+  if (!isPaused) { ctx.clearRect(0, 0, canvas.width, canvas.height); }
+});
+
+document.getElementById('trails-btn').addEventListener('click', () => {
+  showTrails = !showTrails;
+  const btn = document.getElementById('trails-btn');
+  btn.classList.toggle('active', showTrails);
+  if (!showTrails) ctx.clearRect(0, 0, canvas.width, canvas.height);
+});
+
+document.getElementById('flip-btn').addEventListener('click', async () => {
+  facingMode = facingMode === 'environment' ? 'user' : 'environment';
+  await startCamera();
+});
+
+thresholdInput.addEventListener('input', () => {
+  threshold = parseInt(thresholdInput.value) / 100;
+  thresholdVal.textContent = thresholdInput.value + '%';
+});
+
+window.addEventListener('resize', resizeCanvas);
+init();
+</script>
+</body>
+</html>
